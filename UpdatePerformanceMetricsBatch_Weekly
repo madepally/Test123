@@ -18,7 +18,7 @@ global class UpdatePerformanceMetricsBatch_Weekly implements Database.Batchable<
             Query = q;
         else
           //  Query = 'Select Active__c,Campaign_Name__c,Object__c,Start_Date__c from Performance_Metrics_Batch__mdt WHERE Start_Date__c=TODAY AND Active__c=True';
-            Query = 'Select Active__c,Campaign_Name__c,Object__c from Performance_Metrics_Batch__mdt';
+            Query = 'Select Active__c,TaskCreatedDate__c,OpportunityCreatedDate__c,Campaign_Name__c,Object__c from Performance_Metrics_Batch__mdt';
         system.debug('Query======>'+Query);
     }
 
@@ -28,10 +28,14 @@ global class UpdatePerformanceMetricsBatch_Weekly implements Database.Batchable<
     }
 
     global void execute(Database.BatchableContext BC, List<Performance_Metrics_Batch__mdt> scope){
+         List<Date> oppDateList = new List<Date>();
+         List<Date> taskDateList = new List<Date>();
         System.debug(LoggingLevel.Info,'****scope size'+scope);
         try{
         for(Performance_Metrics_Batch__mdt mdt : scope){
             if(mdt.Active__c == true){
+                oppDateList.add(mdt.OpportunityCreatedDate__c); 
+                taskDateList.add(mdt.TaskCreatedDate__c);
                 List<String> campaigns;
                 if(ObjCampaignMap.containsKey(mdt.Object__c))
                     campaigns = ObjCampaignMap.get(mdt.Object__c);
@@ -54,7 +58,7 @@ global class UpdatePerformanceMetricsBatch_Weekly implements Database.Batchable<
         Integer QuotesWon,QuoteLost,UnitWon,UnitLost,UnitNoDecision,QuoteNoDecision,TaskCompleted,TaskInprogress,TaskNotstarted;
         
         if(ObjCampaignMap.containsKey('Account')){
-            for(Account acc : [Select id,National_Account_Launch__c,Branch__c,OwnerId,(SELECT Id,Job_Profile__c,AccountId, Name, StageName, of_Units__c FROM Opportunities),Name,Selling_Area__c,Owner.Name,Territory__c from Account where National_Account_Launch__c IN: ObjCampaignMap.get('Account')]){
+            for(Account acc : [Select id,National_Account_Launch__c,Branch__c,OwnerId,(SELECT Id,Job_Profile__c,AccountId, Name, StageName, of_Units__c FROM Opportunities where CreatedDate IN:oppDateList),Name,Selling_Area__c,Owner.Name,Territory__c from Account where National_Account_Launch__c IN: ObjCampaignMap.get('Account')]){
                 QuotesWon = QuoteLost = UnitWon = UnitLost = UnitNoDecision = QuoteNoDecision = 0;
                 AcctSet.add(acc);
                 if(acc != null){
@@ -90,7 +94,7 @@ global class UpdatePerformanceMetricsBatch_Weekly implements Database.Batchable<
                 }
             }
         
-            for(Task tsk : [SELECT Id, Status, Type, AccountId FROM Task where AccountId IN: acctSet]){
+            for(Task tsk : [SELECT Id, Status, Type, AccountId FROM Task where AccountId IN: acctSet and CreatedDate IN: taskDateList]){
                 List<Task> tskList;           
                 if(MapAcctTasks.containsKey(tsk.AccountId))
                     tsklist = MapAcctTasks.get(tsk.AccountId);
@@ -120,7 +124,7 @@ global class UpdatePerformanceMetricsBatch_Weekly implements Database.Batchable<
             }
         }
         if(ObjCampaignMap.containsKey('Job Profile')){
-            for(Job_Profile__c Jacc : [SELECT Id, Name, Branch_Id__c,OwnerId,(SELECT Id,Job_Profile__c, Name, StageName, of_Units__c FROM Opportunities__r),National_Account_Campaign__c,Territory__c,Job_Profile_ID__c,Job_Profile_Name__c FROM Job_Profile__c where National_Account_Campaign__c IN:ObjCampaignMap.get('Job Profile')]){
+            for(Job_Profile__c Jacc : [SELECT Id, Name, Branch_Id__c,OwnerId,(SELECT Id,Job_Profile__c, Name, StageName, of_Units__c FROM Opportunities__r WHERE CreatedDate IN:oppDateList),National_Account_Campaign__c,Territory__c,Job_Profile_ID__c,Job_Profile_Name__c FROM Job_Profile__c where National_Account_Campaign__c IN:ObjCampaignMap.get('Job Profile')]){
                 QuotesWon = QuoteLost = UnitWon = UnitLost = UnitNoDecision = QuoteNoDecision = TaskCompleted = TaskInprogress = TaskNotstarted = 0;
                 JobProfSet.add(Jacc.Id);
                 if(Jacc != null){
@@ -155,7 +159,7 @@ global class UpdatePerformanceMetricsBatch_Weekly implements Database.Batchable<
                     MapJobProfPerfMetrics.put(Jacc.id,perfMet);
                 }
             } 
-            for(Task tsk : [SELECT Id, Status, Type, Job_Profile_ID__c FROM Task where Job_Profile_ID__c IN: JobProfSet]){
+            for(Task tsk : [SELECT Id, Status, Type, Job_Profile_ID__c FROM Task where Job_Profile_ID__c IN: JobProfSet and CreatedDate in:taskDateList]){
                 List<Task> tskList;           
                 if(MapJobProfTasks.containsKey(tsk.Job_Profile_ID__c ))
                     tsklist = MapJobProfTasks.get(tsk.Job_Profile_ID__c );
