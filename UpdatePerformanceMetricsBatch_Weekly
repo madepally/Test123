@@ -1,0 +1,207 @@
+/**********************************************************************
+* Name           : UpdatePerformanceMetricsBatch_Weekly
+* Created Date   : 28th May, 2018
+* Purpose        : This batch will run weekly based on the
+'Performance_Metrics_Batch__mdt' - Custom Metadata type.
+It would query all the Account or Job Profile records that have a particular
+National Account Campaign, and also query related, Tasks and Opportunities
+and update it in the Performance_Metrics__c object.
+
+**********************************************************************/
+global class UpdatePerformanceMetricsBatch_Weekly implements Database.Batchable<sObject>{
+    global final String Query;
+    global Set<Performance_Metrics_Batch__mdt> mdtSet = new Set<Performance_Metrics_Batch__mdt>();
+    Map<String,List<String>> ObjCampaignMap = new Map<String,List<String>>();
+    
+    global UpdatePerformanceMetricsBatch_Weekly (String q){
+        if(!String.isBlank(q))
+            Query = q;
+        else
+          //  Query = 'Select Active__c,Campaign_Name__c,Object__c,Start_Date__c from Performance_Metrics_Batch__mdt WHERE Start_Date__c=TODAY AND Active__c=True';
+            Query = 'Select Active__c,Campaign_Name__c,Object__c from Performance_Metrics_Batch__mdt';
+        system.debug('Query======>'+Query);
+    }
+
+    global Database.QueryLocator start(Database.BatchableContext BC){
+        system.debug('*******  In  start method');
+      return Database.getQueryLocator(Query);
+    }
+
+    global void execute(Database.BatchableContext BC, List<Performance_Metrics_Batch__mdt> scope){
+        System.debug(LoggingLevel.Info,'****scope size'+scope);
+        try{
+        for(Performance_Metrics_Batch__mdt mdt : scope){
+            if(mdt.Active__c == true){
+                List<String> campaigns;
+                if(ObjCampaignMap.containsKey(mdt.Object__c))
+                    campaigns = ObjCampaignMap.get(mdt.Object__c);
+                else
+                    campaigns = new List<String>();
+                campaigns.add(mdt.Campaign_Name__c);
+                ObjCampaignMap.put(mdt.Object__c,campaigns);
+            }
+            if(!mdtSet.contains(mdt))
+                mdtSet.add(mdt);
+        }
+        system.debug('$$$$$ Map '+ObjCampaignMap);
+        Set<Account> AcctSet = new Set<Account>();
+        Set<Id> JobProfSet = new Set<Id>();
+        Map<Id,Performance_Metrics__c> MapAcctPerfMetrics = new Map<Id,Performance_Metrics__c>();
+        Map<Id,Performance_Metrics__c> MapJobProfPerfMetrics = new Map<Id,Performance_Metrics__c>();
+        Map<Id,List<Task>> MapAcctTasks = new Map<Id,List<Task>>();
+        Map<Id,List<Task>> MapJobProfTasks = new Map<Id,List<Task>>();
+        List<Performance_Metrics__c> perMetricList =  new List<Performance_Metrics__c>(); 
+        Integer QuotesWon,QuoteLost,UnitWon,UnitLost,UnitNoDecision,QuoteNoDecision,TaskCompleted,TaskInprogress,TaskNotstarted;
+        
+        if(ObjCampaignMap.containsKey('Account')){
+            for(Account acc : [Select id,National_Account_Launch__c,Branch__c,OwnerId,(SELECT Id,Job_Profile__c,AccountId, Name, StageName, of_Units__c FROM Opportunities),Name,Selling_Area__c,Owner.Name,Territory__c from Account where National_Account_Launch__c IN: ObjCampaignMap.get('Account')]){
+                QuotesWon = QuoteLost = UnitWon = UnitLost = UnitNoDecision = QuoteNoDecision = 0;
+                AcctSet.add(acc);
+                if(acc != null){
+                    if(acc.Opportunities.size() >0){
+                        for(Opportunity accOpp: acc.Opportunities){
+                            if(accOpp.StageName == 'Quoted - Won'){
+                                QuotesWon++;
+                                UnitWon += Integer.valueOF(UpdatePerformanceMetricsBatch_Weekly.ifNull(accOpp.of_Units__c));
+                            }else if(accOpp.StageName == 'Quoted - Lost Business'){
+                                QuoteLost++;
+                                UnitLost += Integer.valueOF(UpdatePerformanceMetricsBatch_Weekly.ifNull(accOpp.of_Units__c));
+                            }else if(accOpp.StageName == 'Quoted - No Decision'){
+                                QuoteNoDecision++;
+                                UnitNoDecision += Integer.valueOF(UpdatePerformanceMetricsBatch_Weekly.ifNull(accOpp.of_Units__c));
+                            } 
+                        }
+                    }
+                    Performance_Metrics__c perFMet  = new Performance_Metrics__c();
+                    perFMet.Batch_Run_Date__c = System.Today();
+                    perFMet.National_Account_Campaign__c = acc.National_Account_Launch__c;
+                    perFMet.No_of_Quotes_Lost__c = QuoteLost;
+                    perFMet.No_of_Quotes_No_decision__c = QuoteNoDecision;
+                    perFMet.No_of_Quotes_Won__c = QuotesWon;
+                    perFMet.No_of_Units_Lost__c = UnitLost;
+                    perFMet.No_of_Units_No_decision__c = UnitNoDecision;
+                    perFMet.No_of_Units_Won__c = UnitWon;
+                    perFMet.Object__c = 'Account';
+                    perFMet.Territory__c = acc.Territory__c;
+                    perFMet.Target_RecordId__c = acc.Id;
+                    perFMet.Branch_Id__c = acc.Branch__c;
+                    perfMet.Record_Owner_Name__c = acc.OwnerId;
+                    MapAcctPerfMetrics.put(acc.id,perfMet);
+                }
+            }
+        
+            for(Task tsk : [SELECT Id, Status, Type, AccountId FROM Task where AccountId IN: acctSet]){
+                List<Task> tskList;           
+                if(MapAcctTasks.containsKey(tsk.AccountId))
+                    tsklist = MapAcctTasks.get(tsk.AccountId);
+                else
+                    tskList = new List<Task>();
+                tskList.add(tsk);
+                MapAcctTasks.put(tsk.AccountId,tskList);
+            }
+            for(Account acc : AcctSet){
+                TaskCompleted = TaskInprogress = TaskNotstarted = 0;
+                if(MapAcctTasks.containsKey(acc.Id)){
+                    for(Task tsk : MapAcctTasks.get(acc.Id)){
+                        if(tsk.Status == 'Not Started'){
+                            TaskNotstarted++;
+                        }else if(tsk.Status == 'In Progress'){
+                            TaskInprogress++;
+                        }else if(tsk.Status == 'Completed'){
+                            TaskCompleted++;
+                        }
+                    }
+                }
+                Performance_Metrics__c perFMet  = MapAcctPerfMetrics.get(acc.Id);            
+                perFMet.Tasks_Completed_Count__c = TaskCompleted;
+                perFMet.Tasks_in_Progress_Count__c = TaskInprogress;
+                perFMet.Tasks_Not_Started_Count__c = TaskNotstarted;
+                perMetricList.add(perFMet);
+            }
+        }
+        if(ObjCampaignMap.containsKey('Job Profile')){
+            for(Job_Profile__c Jacc : [SELECT Id, Name, Branch_Id__c,OwnerId,(SELECT Id,Job_Profile__c, Name, StageName, of_Units__c FROM Opportunities__r),National_Account_Campaign__c,Territory__c,Job_Profile_ID__c,Job_Profile_Name__c FROM Job_Profile__c where National_Account_Campaign__c IN:ObjCampaignMap.get('Job Profile')]){
+                QuotesWon = QuoteLost = UnitWon = UnitLost = UnitNoDecision = QuoteNoDecision = TaskCompleted = TaskInprogress = TaskNotstarted = 0;
+                JobProfSet.add(Jacc.Id);
+                if(Jacc != null){
+                    if(Jacc.Opportunities__r.size() >0){
+                        for(Opportunity JaccOpp: Jacc.Opportunities__r){
+                            if(JaccOpp.StageName == 'Quoted - Won'){
+                                QuotesWon++;
+                                UnitWon += Integer.valueOF(UpdatePerformanceMetricsBatch_Weekly.ifNull(JaccOpp.of_Units__c));
+                            }else if(JaccOpp.StageName == 'Quoted - Lost Business'){
+                                QuoteLost++;
+                                UnitLost += Integer.valueOF(UpdatePerformanceMetricsBatch_Weekly.ifNull(JaccOpp.of_Units__c));
+                            }else if(JaccOpp.StageName == 'Quoted - No Decision'){
+                                QuoteNoDecision++;
+                                UnitNoDecision += Integer.valueOF(UpdatePerformanceMetricsBatch_Weekly.ifNull(JaccOpp.of_Units__c));
+                            } 
+                        }
+                    }                        
+                    Performance_Metrics__c perFMet  = new Performance_Metrics__c();
+                    perFMet.Batch_Run_Date__c = System.Today();
+                    perFMet.National_Account_Campaign__c = Jacc.National_Account_Campaign__c;
+                    perFMet.No_of_Quotes_Lost__c = QuoteLost;
+                    perFMet.No_of_Quotes_No_decision__c = QuoteNoDecision;
+                    perFMet.No_of_Quotes_Won__c = QuotesWon;
+                    perFMet.No_of_Units_Lost__c = UnitLost;
+                    perFMet.No_of_Units_No_decision__c = UnitNoDecision;
+                    perFMet.No_of_Units_Won__c = UnitWon;
+                    perFMet.Object__c = 'Job Profile';
+                    perFMet.Territory__c = Jacc.Territory__c;
+                    perFMet.Target_RecordId__c = Jacc.Id;
+                    perFMet.Branch_Id__c = Jacc.Branch_Id__c;
+                    perfMet.Record_Owner_Name__c = Jacc.OwnerId;
+                    MapJobProfPerfMetrics.put(Jacc.id,perfMet);
+                }
+            } 
+            for(Task tsk : [SELECT Id, Status, Type, Job_Profile_ID__c FROM Task where Job_Profile_ID__c IN: JobProfSet]){
+                List<Task> tskList;           
+                if(MapJobProfTasks.containsKey(tsk.Job_Profile_ID__c ))
+                    tsklist = MapJobProfTasks.get(tsk.Job_Profile_ID__c );
+                else
+                    tskList = new List<Task>();
+                tskList.add(tsk);
+                MapJobProfTasks.put(tsk.Job_Profile_ID__c ,tskList);
+            }
+            for(Id Jacc : JobProfSet){
+                TaskCompleted = TaskInprogress = TaskNotstarted = 0;
+                if(MapJobProfTasks.containsKey(Jacc)){
+                    for(Task tsk : MapJobProfTasks.get(Jacc)){
+                        if(tsk.Status == 'Not Started'){
+                            TaskNotstarted++;
+                        }else if(tsk.Status == 'In Progress'){
+                            TaskInprogress++;
+                        }else if(tsk.Status == 'Completed'){
+                            TaskCompleted++;
+                        }
+                    }
+                }
+                Performance_Metrics__c perFMet  = MapJobProfPerfMetrics.get(Jacc);            
+                perFMet.Tasks_Completed_Count__c = TaskCompleted;
+                perFMet.Tasks_in_Progress_Count__c = TaskInprogress;
+                perFMet.Tasks_Not_Started_Count__c = TaskNotstarted;
+                perMetricList.add(perFMet);
+            }
+            
+        }  
+        
+        if(!perMetricList.isEmpty())
+            insert perMetricList;
+        }catch(exception ex){
+            system.debug('****Exception in UpdatePerformanceMetricsBatch_Weekly**** '+ex.getMessage()+'**'+ex.getLineNumber());
+        }
+    }
+
+
+    global void finish(Database.BatchableContext BC){
+        System.debug('****inside finish***');
+
+    }
+    
+    public static Decimal ifnull(Decimal num) {
+        if (num == null) num = 0;
+        return num;         
+    }
+
+}
